@@ -1,0 +1,15 @@
+# Secrets and session state
+.env
+*.session
+*.session-journal
+keeplist.json
+
+# Temporary data
+.tmp/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
