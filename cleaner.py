@@ -57,6 +57,7 @@ from rich.table import Table
 FLOOD_SLEEP_THRESHOLD = 300
 PAUSE_BETWEEN_ACTIONS = 1.0
 KEEPLIST_PATH = Path("keeplist.json")
+LAST_SCAN_PATH = Path(".tmp") / "last-scan.json"
 SESSION_NAME = "cleaner"
 
 app = typer.Typer(add_completion=False, help="Personal Telegram janitor.")
@@ -489,22 +490,36 @@ def _fmt_date(d: datetime | None) -> str:
     return d.strftime("%Y-%m-%d") if d else "(no messages)"
 
 
-def _candidate_table(candidates: list[Candidate], title: str) -> Table:
+def _candidate_table(candidates: list[Candidate], title: str, show_numbers: bool = False) -> Table:
     table = Table(title=title)
+    if show_numbers:
+        table.add_column("#", justify="right", style="dim")
     table.add_column("Type")
     table.add_column("Title", max_width=40)
     table.add_column("Last message")
     table.add_column("Unread", justify="right")
     table.add_column("Handle")
-    for c in candidates:
-        table.add_row(
-            c.category.value,
-            c.info.title,
-            _fmt_date(c.info.last_message_date),
-            str(c.info.unread_count),
-            _handle(c.info),
-        )
+    for i, c in enumerate(candidates, 1):
+        row = [c.category.value, c.info.title, _fmt_date(c.info.last_message_date), str(c.info.unread_count), _handle(c.info)]
+        table.add_row(*([str(i)] + row if show_numbers else row))
     return table
+
+
+def save_last_scan(candidates: list[Candidate]) -> None:
+    """Persist numbered candidates from the most recent scan for inspect lookup."""
+    LAST_SCAN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = [{"n": i + 1, "id": c.info.id, "title": c.info.title, "category": c.category.value} for i, c in enumerate(candidates)]
+    LAST_SCAN_PATH.write_text(json.dumps(data))
+
+
+def load_last_scan() -> dict[int, int]:
+    """Return {scan_number: chat_id} from the last scan. Empty if none."""
+    if not LAST_SCAN_PATH.exists():
+        return {}
+    try:
+        return {entry["n"]: entry["id"] for entry in json.loads(LAST_SCAN_PATH.read_text())}
+    except (ValueError, KeyError):
+        return {}
 
 
 def _failures(result: BatchResult) -> None:
@@ -576,8 +591,10 @@ def scan(
     console.print(summary)
     shown_cats = filter_cats if filter_cats is not None else actionable_cats
     actionable = [c for c in candidates if c.category in shown_cats]
+    save_last_scan(actionable)
     if actionable:
-        console.print(_candidate_table(actionable, "Candidates"))
+        console.print(_candidate_table(actionable, "Candidates", show_numbers=True))
+        console.print("[dim]Use: uv run cleaner.py inspect <number> [number ...][/dim]")
     else:
         msg = "Nothing to clean. Your chat list is tidy." if filter_cats is None else f"No candidates for: {types}"
         console.print(msg)
@@ -693,13 +710,40 @@ def review(
 
 @app.command()
 def inspect(
-    name: str = typer.Argument(help="Substring to match against chat titles (case-insensitive)."),
+    targets: list[str] = typer.Argument(
+        help="Scan numbers from the last scan (e.g. 1 3 5) or name substrings. Mix freely."
+    ),
     messages: int = typer.Option(5, "--messages", "-m", help="Number of recent messages to fetch."),
     stale_days: int = typer.Option(730, help="DM silence threshold in days"),
     group_quiet_days: int = typer.Option(365, help="Group silence threshold in days"),
     channel_unread_min: int = typer.Option(50, help="Channel unread-count threshold"),
 ) -> None:
-    """Show why a chat was classified and its recent messages. Read-only."""
+    """Show why chats were classified and their recent messages. Read-only.
+
+    Pass scan result numbers (from the # column) or name substrings:
+
+      uv run cleaner.py inspect 1 3 5
+      uv run cleaner.py inspect "Mr.Crypto"
+      uv run cleaner.py inspect 2 "atlas"
+    """
+    if not targets:
+        console.print("[red]Provide at least one scan number or name substring.[/red]")
+        raise typer.Exit(code=1)
+
+    last_scan = load_last_scan()  # {n: chat_id}
+
+    # Resolve each target to either a chat_id (int) or a name needle (str).
+    by_id: list[int] = []
+    by_name: list[str] = []
+    for t in targets:
+        if t.isdigit():
+            n = int(t)
+            if n not in last_scan:
+                console.print(f"[red]#{n} not found in last scan. Run 'scan' first.[/red]")
+                raise typer.Exit(code=1)
+            by_id.append(last_scan[n])
+        else:
+            by_name.append(t.lower())
 
     async def _inspect() -> None:
         from telethon.tl.types import Message
@@ -709,16 +753,18 @@ def inspect(
             thresholds = _thresholds_options(stale_days, group_quiet_days, channel_unread_min)
             keeplist = load_keeplist()
             now = datetime.now(timezone.utc)
-            needle = name.lower()
-            found = []
+
+            found: list[tuple] = []
             async for dialog in client.iter_dialogs():
-                if needle in (dialog.name or "").lower():
-                    info = build_info(dialog)
-                    category = classify(info, thresholds, keeplist, now)
-                    found.append((dialog, info, category))
+                info = build_info(dialog)
+                matched = info.id in by_id or any(n in (dialog.name or "").lower() for n in by_name)
+                if not matched:
+                    continue
+                category = classify(info, thresholds, keeplist, now)
+                found.append((dialog, info, category))
 
             if not found:
-                console.print(f'No chats matching "{name}".')
+                console.print("No matching chats found.")
                 return
 
             for dialog, info, category in found:
@@ -731,9 +777,9 @@ def inspect(
                 console.print(f"  muted:      {info.muted}")
                 links = chat_links(info)
                 if links:
-                    console.print(f"  link:       {links[0]}")
+                    console.print(f"  link:       [link={links[0]}]{links[0]}[/link]")
                 else:
-                    console.print("  link:       none (private, find it by name in your Telegram app)")
+                    console.print("  link:       none (private — find it by name in your Telegram app)")
 
                 console.print(f"\n  Last {messages} message(s):")
                 async for msg in client.iter_messages(dialog.id, limit=messages):
