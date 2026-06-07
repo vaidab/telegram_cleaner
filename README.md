@@ -25,6 +25,7 @@ Notes on detection:
   itself is older than the threshold — a contact added yesterday never shows up.
 - Muted channels never classify as `unread_channel`: mute is read as "deliberately kept".
 - `ghost` and `forbidden` are purge-only; passing them to `review --types` is rejected.
+- Groups migrated by Telegram from basic chat to supergroup degrade to dialog-delete only (no leave call needed).
 
 The full clean is two commands:
 
@@ -62,7 +63,10 @@ it is gitignored. See `runbook/auth.md` for details.
 ### scan
 
 Read-only. Classifies every dialog and prints a summary table (counts per
-category) plus a detail table of all actionable candidates. Always safe to run.
+category) plus a numbered detail table of actionable candidates. Always safe.
+
+Candidate numbers are saved to `.tmp/last-scan.json` so you can pass them
+directly to `inspect`.
 
 ```bash
 uv run cleaner.py scan
@@ -74,6 +78,27 @@ uv run cleaner.py scan --types stale_dm,dead_group
 # Adjust thresholds
 uv run cleaner.py scan --stale-days 365 --group-quiet-days 180 --channel-unread-min 100
 ```
+
+### inspect
+
+Show why specific chats were classified and fetch their recent messages. Read-only.
+
+Pass scan numbers (from the `#` column), name substrings, or mix both:
+
+```bash
+uv run cleaner.py inspect 1 3 5           # by scan number
+uv run cleaner.py inspect "Mr.Crypto"     # by name substring (case-insensitive)
+uv run cleaner.py inspect 2 "atlas"       # mix
+
+uv run cleaner.py inspect 1 --messages 10  # show last 10 messages instead of 5
+```
+
+Output for each match:
+- Telegram ID, entity kind, classification category
+- Last message date, unread count, mute state
+- Clickable `https://t.me/` link (where available); private groups without a
+  public username show a note to find them by name in your Telegram app
+- Last N messages with date, sender ID, and text preview
 
 ### purge-ghosts
 
@@ -89,15 +114,14 @@ uv run cleaner.py purge-ghosts --yes --include-forbidden   # also clears tombsto
 ### review
 
 Interactive triage for `stale_dm`, `dead_group`, and `unread_channel`. Each
-candidate is shown with its Telegram ID, last message date and preview, unread
-count, and a clickable `https://t.me/` link (where available) so you can open
-the chat before deciding.
+candidate shows its Telegram ID, last message date and preview, unread count,
+and a clickable `https://t.me/` link (where available).
 
 Per-item choices:
 - `y` — approve (add to the batch)
 - `n` — skip (chat stays, reappears on the next scan)
 - `k` — keep forever (chat ID added to `keeplist.json`, never suggested again)
-- `q` — approve this item and stop (skips all remaining, then confirms the batch)
+- `q` — approve this item and stop (skips all remaining, then asks for final batch confirmation)
 
 After triage, the full list of approved actions is shown and a single final
 confirmation gates execution. Cancelling at that point executes nothing.
@@ -117,7 +141,7 @@ uv run cleaner.py review --stale-days 365 --group-quiet-days 180 --channel-unrea
 
 ## Thresholds
 
-All three threshold flags work on both `scan` and `review`:
+All three threshold flags work on `scan`, `review`, and `inspect`:
 
 | Flag | Default | Applies to |
 |------|---------|-----------|
@@ -139,10 +163,12 @@ classifies as `keep` unconditionally and never appears as a candidate again.
 - `review` requires per-item approval AND a final batch confirmation; `--approve-all`
   skips the per-item loop but the final confirmation still fires.
 - Per-chat failures are skipped and reported at the end; auth/network failures
-  abort the batch immediately.
+  abort the batch immediately (connection error class, not per-entity errors).
 - Rate limits are handled by Telethon (`flood_sleep_threshold=300`); any wait
   above 5 minutes aborts cleanly with a re-run-later message.
 - A 1-second pause between consecutive destructive calls keeps batches polite.
+- Groups migrated from basic chat to supergroup are handled gracefully: they
+  degrade to dialog-delete only rather than crashing.
 
 ## Tests
 
@@ -152,7 +178,8 @@ uv run ruff check .
 ```
 
 Classification, action mapping, batch executor (including the error-class circuit
-breaker), and all CLI safety gates are covered without touching the network.
+breaker and progress callback), scan numbering, last-scan persistence, and all
+CLI safety gates are covered without touching the network.
 
 ## Runbook
 

@@ -235,6 +235,63 @@ def no_credentials(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+# --- scan: numbering and last-scan persistence -----------------------------------
+
+
+def test_scan_saves_last_scan_json(monkeypatch, tmp_path):
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", tmp_path / "last-scan.json")
+    patch_candidates(monkeypatch, [make_candidate(Category.GHOST, id=42)])
+    runner.invoke(app, ["scan"])
+    scan_map = cleaner.load_last_scan()
+    assert scan_map == {1: 42}
+
+
+def test_scan_numbers_are_sequential(monkeypatch, tmp_path):
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", tmp_path / "last-scan.json")
+    patch_candidates(monkeypatch, [make_candidate(Category.GHOST, id=i) for i in (10, 20, 30)])
+    runner.invoke(app, ["scan"])
+    assert cleaner.load_last_scan() == {1: 10, 2: 20, 3: 30}
+
+
+def test_scan_output_contains_hash_column(monkeypatch, tmp_path):
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", tmp_path / "last-scan.json")
+    patch_candidates(monkeypatch, [make_candidate(Category.GHOST, id=1)])
+    result = runner.invoke(app, ["scan"])
+    assert result.exit_code == 0
+    assert "#" in result.output
+
+
+def test_load_last_scan_returns_empty_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", tmp_path / "no-such-file.json")
+    assert cleaner.load_last_scan() == {}
+
+
+def test_load_last_scan_returns_empty_on_corrupt_file(tmp_path, monkeypatch):
+    p = tmp_path / "last-scan.json"
+    p.write_text("not json")
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", p)
+    assert cleaner.load_last_scan() == {}
+
+
+# --- inspect: number and name lookup -----------------------------------------
+
+
+def test_inspect_by_number_errors_without_scan(monkeypatch, tmp_path):
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", tmp_path / "no-scan.json")
+    result = runner.invoke(app, ["inspect", "1"])
+    assert result.exit_code == 1
+    assert "Run 'scan' first" in result.output
+
+
+def test_inspect_no_targets_exits_nonzero(monkeypatch, tmp_path):
+    monkeypatch.setattr(cleaner, "LAST_SCAN_PATH", tmp_path / "scan.json")
+    # Empty list is passed — our guard fires before network
+    monkeypatch.setattr(cleaner, "gather_candidates", lambda _: [])
+    result = runner.invoke(app, ["inspect", ""])
+    # Either our guard (exit 1) or Typer missing-arg (exit 2) — both are non-zero
+    assert result.exit_code != 0
+
+
 def test_missing_env_vars_abort_scan_with_runbook_pointer(no_credentials):
     # gather_candidates NOT patched: scan must die at validation, before any network
     result = runner.invoke(app, ["scan"])
