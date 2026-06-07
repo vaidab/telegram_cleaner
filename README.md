@@ -1,12 +1,38 @@
 # telegram_cleaner
 
-Personal Telegram janitor. Sweeps the dead weight out of your chat list:
+Personal Telegram janitor. Sweeps the dead weight out of your chat list.
 
-- **ghosts** — DMs with "Deleted Account" users (delete)
-- **forbidden** — tombstones of groups that kicked you or were deleted (delete entry)
-- **stale DMs** — conversations silent longer than a threshold (review, then delete)
-- **dead groups** — groups with no activity (review, then leave + delete)
-- **unread channels** — broadcast channels piling up unread, not muted (review, then unsubscribe)
+Every dialog is classified into exactly one type. The type decides both what
+happens to it and **which command handles it**:
+
+| Type | What it is | Detected by | Action | Command |
+|------|-----------|-------------|--------|---------|
+| `ghost` | DM with a "Deleted Account" user | account's deleted flag | delete conversation | `purge-ghosts` |
+| `forbidden` | Tombstone of a group that kicked you or was deleted by its owner | entity type | delete dead entry | `purge-ghosts --include-forbidden` |
+| `stale_dm` | DM silent longer than `--stale-days` (default 730) | last message age | delete conversation | `review` |
+| `dead_group` | Group with no messages for `--group-quiet-days` (default 365) | last message age | leave + delete history | `review` |
+| `unread_channel` | Broadcast channel with `--channel-unread-min`+ unread (default 50), not muted | unread count | unsubscribe | `review` |
+| `keep` | Everything else, plus anything in `keeplist.json` | — | never touched | — |
+
+Why two commands: `ghost` and `forbidden` are unambiguous dead weight — nothing
+of value can be lost, so `purge-ghosts` sweeps them in one shot. The other three
+are heuristics that can be wrong about chats you still want (a quiet group, a
+muted-adjacent channel), so `review` walks you through them one at a time and
+nothing executes until you approve each item AND confirm the final batch.
+
+Notes on detection:
+- An empty dialog (zero messages) counts as stale/dead only if the dialog
+  itself is older than the threshold — a contact added yesterday never shows up.
+- Muted channels never classify as `unread_channel`: mute is read as
+  "deliberately kept".
+- `ghost` and `forbidden` are purge-only; `review --types ghost` is rejected.
+
+The full clean is two commands:
+
+```bash
+uv run cleaner.py purge-ghosts --yes --include-forbidden   # the no-questions sweep
+uv run cleaner.py review                                   # the judgment calls
+```
 
 Runs locally against your own account via Telethon (official MTProto API). No bot,
 no third-party service ever sees your account.
