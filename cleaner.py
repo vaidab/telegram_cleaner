@@ -460,22 +460,30 @@ def _handle(info: DialogInfo) -> str:
     return f"@{info.username}" if info.username else "no public link"
 
 
-def chat_link(info: DialogInfo) -> str | None:
-    """Best-effort deep link that opens the chat in the local Telegram app.
+def chat_links(info: DialogInfo) -> list[str]:
+    """Best-effort deep links that open the chat in the local Telegram app.
 
-    - public username: t.me link (most reliable everywhere)
-    - user by id: tg:// scheme (Telegram Desktop / mobile)
-    - channel/supergroup (-100... ids): t.me/c/ member link
-    - basic group without username: no reliable scheme exists -> None
+    Returns up to two links: a https://t.me/ one (browser-friendly) and a
+    tg:// one (direct app open, no browser step). Empty list when no reliable
+    link exists (basic private group with no username).
     """
     if info.username:
-        return f"https://t.me/{info.username}"
+        return [
+            f"https://t.me/{info.username}",
+            f"tg://resolve?domain={info.username}",
+        ]
     if info.kind is Kind.USER:
-        return f"tg://openmessage?user_id={info.id}"
+        return [
+            f"tg://openmessage?user_id={info.id}",
+        ]
     raw = str(info.id)
     if raw.startswith("-100"):
-        return f"https://t.me/c/{raw[4:]}"
-    return None
+        internal = raw[4:]
+        return [
+            f"https://t.me/c/{internal}",
+            f"tg://privatepost?channel={internal}",
+        ]
+    return []
 
 
 def _fmt_date(d: datetime | None) -> str:
@@ -585,9 +593,20 @@ def review(
     stale_days: int = typer.Option(730, help="DM silence threshold in days"),
     group_quiet_days: int = typer.Option(365, help="Group silence threshold in days"),
     channel_unread_min: int = typer.Option(50, help="Channel unread-count threshold"),
+    approve_all: bool = typer.Option(
+        False,
+        "--approve-all",
+        help=(
+            "Skip per-item triage and approve the entire batch at once. "
+            "A final confirmation still gates execution."
+        ),
+    ),
 ) -> None:
     """Interactive triage: y = approve, n = skip, k = keep forever. One final
-    confirmation gates the whole batch. There is no --yes here by design."""
+    confirmation gates the whole batch. There is no --yes here by design.
+
+    Use --approve-all to skip per-item triage and clean everything the
+    scanner found in one shot (final confirmation still required)."""
     allowed = {c.value for c in REVIEW_TYPES}
     requested = [t.strip() for t in types.split(",") if t.strip()]
     invalid = [t for t in requested if t not in allowed]
@@ -605,29 +624,34 @@ def review(
         console.print("No candidates for the requested types. Nothing to review.")
         return
 
-    approved: list[Candidate] = []
-    for i, cand in enumerate(candidates, 1):
-        info = cand.info
-        link = chat_link(info)
-        console.print(
-            f"\n[bold]{i}/{len(candidates)}[/bold]  [{cand.category.value}]  {info.title}"
-            f"   (id: {info.id})\n"
-            f"  last message: {_fmt_date(info.last_message_date)}"
-            + (f" - {info.snippet}" if info.snippet else "")
-            + f"   unread: {info.unread_count}\n"
-            + (f"  open: [link={link}]{link}[/link]\n" if link else "")
-            + f"  {CONFIRM_COPY[cand.category].format(handle=_handle(info))}"
-        )
-        while True:
-            choice = typer.prompt("  approve / skip / keep forever [y/n/k]").strip().lower()
-            if choice in ("y", "n", "k"):
-                break
-            console.print("  Please answer y, n, or k.")
-        if choice == "y":
-            approved.append(cand)
-        elif choice == "k":
-            append_keeplist(info.id)
-            console.print(f"  Added to keeplist — {info.title} will never be suggested again.")
+    if approve_all:
+        approved = list(candidates)
+        console.print(_candidate_table(approved, f"All candidates ({len(approved)}) — approve-all mode"))
+    else:
+        approved = []
+        for i, cand in enumerate(candidates, 1):
+            info = cand.info
+            links = chat_links(info)
+            links_line = "  open: " + "   ".join(f"[link={u}]{u}[/link]" for u in links) + "\n" if links else ""
+            console.print(
+                f"\n[bold]{i}/{len(candidates)}[/bold]  [{cand.category.value}]  {info.title}"
+                f"   (id: {info.id})\n"
+                f"  last message: {_fmt_date(info.last_message_date)}"
+                + (f" - {info.snippet}" if info.snippet else "")
+                + f"   unread: {info.unread_count}\n"
+                + links_line
+                + f"  {CONFIRM_COPY[cand.category].format(handle=_handle(info))}"
+            )
+            while True:
+                choice = typer.prompt("  approve / skip / keep forever [y/n/k]").strip().lower()
+                if choice in ("y", "n", "k"):
+                    break
+                console.print("  Please answer y, n, or k.")
+            if choice == "y":
+                approved.append(cand)
+            elif choice == "k":
+                append_keeplist(info.id)
+                console.print(f"  Added to keeplist — {info.title} will never be suggested again.")
 
     if not approved:
         console.print("\nNothing approved. Nothing executed.")

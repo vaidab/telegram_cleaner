@@ -143,31 +143,51 @@ def make_info(**overrides):
     return dataclasses.replace(make_candidate(Category.STALE_DM).info, **overrides)
 
 
-def test_chat_link_prefers_public_username():
+def test_chat_links_public_username_returns_both():
     info = make_info(id=-1001234, kind=Kind.BROADCAST, username="somechannel")
-    assert cleaner.chat_link(info) == "https://t.me/somechannel"
+    links = cleaner.chat_links(info)
+    assert "https://t.me/somechannel" in links
+    assert "tg://resolve?domain=somechannel" in links
 
 
-def test_chat_link_user_by_id():
+def test_chat_links_user_by_id():
     info = make_info(id=987654, kind=Kind.USER, username=None)
-    assert cleaner.chat_link(info) == "tg://openmessage?user_id=987654"
+    assert cleaner.chat_links(info) == ["tg://openmessage?user_id=987654"]
 
 
-def test_chat_link_supergroup_member_link():
+def test_chat_links_supergroup_returns_both():
     info = make_info(id=-1001234567890, kind=Kind.MEGAGROUP, username=None)
-    assert cleaner.chat_link(info) == "https://t.me/c/1234567890"
+    links = cleaner.chat_links(info)
+    assert "https://t.me/c/1234567890" in links
+    assert "tg://privatepost?channel=1234567890" in links
 
 
-def test_chat_link_basic_group_has_no_reliable_link():
+def test_chat_links_basic_group_returns_empty():
     info = make_info(id=-4321, kind=Kind.GROUP, username=None)
-    assert cleaner.chat_link(info) is None
+    assert cleaner.chat_links(info) == []
 
 
-def test_review_shows_open_link(monkeypatch, actions_recorder):
+def test_review_shows_open_links(monkeypatch, actions_recorder):
     patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=987654)])
     result = runner.invoke(app, ["review"], input="n\n")
     assert result.exit_code == 0
     assert "tg://openmessage?user_id=987654" in result.output
+
+
+def test_approve_all_skips_per_item_triage_but_final_yes_executes(monkeypatch, actions_recorder):
+    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=i) for i in (1, 2, 3)])
+    result = runner.invoke(app, ["review", "--approve-all"], input="y\n")
+    assert result.exit_code == 0
+    assert len(actions_recorder) == 1
+    assert [c.info.id for c in actions_recorder[0]] == [1, 2, 3]
+
+
+def test_approve_all_final_no_still_cancels(monkeypatch, actions_recorder):
+    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=1)])
+    result = runner.invoke(app, ["review", "--approve-all"], input="n\n")
+    assert result.exit_code == 0
+    assert actions_recorder == []
+    assert "Cancelled" in result.output
 
 
 def test_review_rejects_unreviewable_types(monkeypatch, actions_recorder):
