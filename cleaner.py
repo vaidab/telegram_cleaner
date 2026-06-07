@@ -691,5 +691,64 @@ def review(
     _failures(run_actions(approved))
 
 
+@app.command()
+def inspect(
+    name: str = typer.Argument(help="Substring to match against chat titles (case-insensitive)."),
+    messages: int = typer.Option(5, "--messages", "-m", help="Number of recent messages to fetch."),
+    stale_days: int = typer.Option(730, help="DM silence threshold in days"),
+    group_quiet_days: int = typer.Option(365, help="Group silence threshold in days"),
+    channel_unread_min: int = typer.Option(50, help="Channel unread-count threshold"),
+) -> None:
+    """Show why a chat was classified and its recent messages. Read-only."""
+
+    async def _inspect() -> None:
+        from telethon.tl.types import Message
+
+        client = await _connect()
+        try:
+            thresholds = _thresholds_options(stale_days, group_quiet_days, channel_unread_min)
+            keeplist = load_keeplist()
+            now = datetime.now(timezone.utc)
+            needle = name.lower()
+            found = []
+            async for dialog in client.iter_dialogs():
+                if needle in (dialog.name or "").lower():
+                    info = build_info(dialog)
+                    category = classify(info, thresholds, keeplist, now)
+                    found.append((dialog, info, category))
+
+            if not found:
+                console.print(f'No chats matching "{name}".')
+                return
+
+            for dialog, info, category in found:
+                console.rule(f"[bold]{info.title}[/bold]")
+                console.print(f"  id:         {info.id}")
+                console.print(f"  kind:       {info.kind.value}")
+                console.print(f"  category:   [bold]{category.value}[/bold]")
+                console.print(f"  last msg:   {_fmt_date(info.last_message_date)}")
+                console.print(f"  unread:     {info.unread_count}")
+                console.print(f"  muted:      {info.muted}")
+                links = chat_links(info)
+                if links:
+                    console.print(f"  link:       {links[0]}")
+                else:
+                    console.print("  link:       none (private, find it by name in your Telegram app)")
+
+                console.print(f"\n  Last {messages} message(s):")
+                async for msg in client.iter_messages(dialog.id, limit=messages):
+                    if not isinstance(msg, Message):
+                        continue
+                    sender = getattr(msg, "sender_id", "?")
+                    date = msg.date.strftime("%Y-%m-%d") if msg.date else "?"
+                    text = (msg.message or "(media/service)").replace("\n", " ")[:120]
+                    console.print(f"    [{date}] {sender}: {text}")
+                console.print()
+        finally:
+            await client.disconnect()
+
+    _run_network(_inspect())
+
+
 if __name__ == "__main__":
     app()
