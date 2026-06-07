@@ -53,6 +53,11 @@ def test_already_left_group_degrades_to_delete_only():
     assert action_for(cand(Category.DEAD_GROUP, kind=Kind.MEGAGROUP, left=True)) is Action.DELETE_DIALOG
 
 
+def test_migrated_basic_group_degrades_to_delete_only():
+    # migrated_to set in build_info -> left=True -> DELETE_DIALOG (no DeleteChatUserRequest)
+    assert action_for(cand(Category.DEAD_GROUP, kind=Kind.GROUP, left=True)) is Action.DELETE_DIALOG
+
+
 def test_unread_channel_maps_to_leave_only():
     assert action_for(cand(Category.UNREAD_CHANNEL, kind=Kind.BROADCAST)) is Action.LEAVE_CHANNEL
 

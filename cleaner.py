@@ -311,7 +311,11 @@ def build_info(dialog) -> DialogInfo:
         deleted = bool(entity.deleted)
     elif isinstance(entity, t.Chat):
         kind = Kind.GROUP
-        left = bool(getattr(entity, "left", False))
+        # migrated_to is set when the basic group was converted to a supergroup;
+        # the old Chat ID is invalid for any leave/kick call — treat as already-left
+        # so action_for() degrades to delete_dialog only.
+        migrated = getattr(entity, "migrated_to", None) is not None
+        left = migrated or bool(getattr(entity, "left", False))
     elif isinstance(entity, t.Channel):
         kind = Kind.MEGAGROUP if entity.megagroup else Kind.BROADCAST
         left = bool(getattr(entity, "left", False))
@@ -360,6 +364,7 @@ async def _fetch(thresholds: Thresholds) -> list[Candidate]:
 
 
 async def _perform_with(client, candidate: Candidate) -> None:
+    from telethon.errors import ChatIdInvalidError
     from telethon.tl.functions.channels import LeaveChannelRequest
     from telethon.tl.functions.messages import DeleteChatUserRequest
 
@@ -373,7 +378,13 @@ async def _perform_with(client, candidate: Candidate) -> None:
         await client(LeaveChannelRequest(await client.get_input_entity(info.id)))
         await client.delete_dialog(info.id)
     elif action is Action.DELETE_CHAT_USER_THEN_DELETE:
-        await client(DeleteChatUserRequest(chat_id=info.id, user_id="me"))
+        try:
+            await client(DeleteChatUserRequest(chat_id=info.id, user_id="me"))
+        except ChatIdInvalidError:
+            # Chat was migrated to a supergroup after classification; the old Chat
+            # ID is invalid. Fall through to delete_dialog to at least clear the
+            # stale entry from the dialog list.
+            pass
         await client.delete_dialog(info.id)
 
 
