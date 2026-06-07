@@ -133,6 +133,32 @@ def test_consecutive_per_entity_failures_never_abort():
     assert not result.aborted
 
 
+def test_on_item_fires_for_every_attempted_candidate():
+    seen = []
+
+    async def perform(c):
+        if c.info.id == 2:
+            raise ValueError("quirky")  # per-entity failure still counts as attempted
+
+    items = [cand(Category.GHOST, id=i) for i in (1, 2, 3)]
+    result = run(execute_batch(items, perform, pause=0, on_item=lambda c: seen.append(c.info.id)))
+    assert seen == [1, 2, 3]
+    assert len(result.done) == 2 and len(result.failed) == 1
+
+
+def test_on_item_does_not_fire_after_systemic_abort():
+    seen = []
+
+    async def perform(c):
+        if c.info.id == 2:
+            raise ConnectionError("socket died")
+
+    items = [cand(Category.GHOST, id=i) for i in (1, 2, 3, 4)]
+    result = run(execute_batch(items, perform, pause=0, on_item=lambda c: seen.append(c.info.id)))
+    assert seen == [1]  # the aborting item and everything after never fire progress
+    assert result.aborted
+
+
 def test_systemic_error_aborts_immediately():
     attempted = []
 

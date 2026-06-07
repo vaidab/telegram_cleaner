@@ -137,21 +137,27 @@ def test_review_has_no_yes_flag():
 # --- env validation ------------------------------------------------------------------
 
 
-def test_missing_env_vars_abort_scan_with_runbook_pointer(monkeypatch, tmp_path):
+@pytest.fixture
+def no_credentials(monkeypatch):
+    """Simulate a machine with no .env and no exported credentials.
+
+    load_dotenv() walks up from cleaner.py's directory, so a developer's real
+    .env would leak into these tests without this patch."""
+    monkeypatch.setattr(cleaner, "load_dotenv", lambda: None)
     for var in ("TG_API_ID", "TG_API_HASH", "TG_PHONE"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.chdir(tmp_path)  # no .env file here; gather_candidates NOT patched
+
+
+def test_missing_env_vars_abort_scan_with_runbook_pointer(no_credentials):
+    # gather_candidates NOT patched: scan must die at validation, before any network
     result = runner.invoke(app, ["scan"])
     assert result.exit_code == 1
     assert "runbook/auth.md" in result.output
     assert "TG_API_ID" in result.output
 
 
-def test_validate_env_raises_typer_exit_directly(monkeypatch, tmp_path):
+def test_validate_env_raises_typer_exit_directly(no_credentials):
     import typer as typer_mod
 
-    for var in ("TG_API_ID", "TG_API_HASH", "TG_PHONE"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.chdir(tmp_path)
     with pytest.raises(typer_mod.Exit):
         cleaner.validate_env()

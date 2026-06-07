@@ -222,9 +222,12 @@ async def execute_batch(
     candidates: list[Candidate],
     perform: Callable[[Candidate], Awaitable[None]],
     pause: float = PAUSE_BETWEEN_ACTIONS,
+    on_item: Callable[[Candidate], None] | None = None,
 ) -> BatchResult:
     """Skip-and-report executor: per-entity failures are collected and never
-    abort; systemic failures abort on first occurrence."""
+    abort; systemic failures abort on first occurrence. on_item fires after
+    each attempted candidate (success or per-entity failure) so callers can
+    drive a progress display; unattempted items after an abort never fire it."""
     result = BatchResult(done=[], failed=[])
     for i, cand in enumerate(candidates):
         try:
@@ -236,6 +239,8 @@ async def execute_batch(
                 result.abort_reason = f"{type(exc).__name__}: {exc}"
                 break
             result.failed.append((cand, f"{type(exc).__name__}: {exc}"))
+        if on_item is not None:
+            on_item(cand)
         if pause and i < len(candidates) - 1:
             await asyncio.sleep(pause)
     return result
@@ -369,10 +374,13 @@ async def _perform_with(client, candidate: Candidate) -> None:
         await client.delete_dialog(info.id)
 
 
-async def _execute(candidates: list[Candidate]) -> BatchResult:
+async def _execute(
+    candidates: list[Candidate],
+    on_item: Callable[[Candidate], None] | None = None,
+) -> BatchResult:
     client = await _connect()
     try:
-        return await execute_batch(candidates, lambda c: _perform_with(client, c))
+        return await execute_batch(candidates, lambda c: _perform_with(client, c), on_item=on_item)
     finally:
         await client.disconnect()
 
@@ -385,7 +393,31 @@ def gather_candidates(thresholds: Thresholds) -> list[Candidate]:
 
 
 def run_actions(candidates: list[Candidate]) -> BatchResult:
-    return _run_network(_execute(candidates))
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeRemainingColumn,
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+        TextColumn("{task.fields[current]}", style="dim"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Cleaning", total=len(candidates), current="")
+        return _run_network(
+            _execute(
+                candidates,
+                on_item=lambda c: progress.update(task, advance=1, current=c.info.title[:40]),
+            )
+        )
 
 
 def _run_network(coro):
