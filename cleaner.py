@@ -460,6 +460,24 @@ def _handle(info: DialogInfo) -> str:
     return f"@{info.username}" if info.username else "no public link"
 
 
+def chat_link(info: DialogInfo) -> str | None:
+    """Best-effort deep link that opens the chat in the local Telegram app.
+
+    - public username: t.me link (most reliable everywhere)
+    - user by id: tg:// scheme (Telegram Desktop / mobile)
+    - channel/supergroup (-100... ids): t.me/c/ member link
+    - basic group without username: no reliable scheme exists -> None
+    """
+    if info.username:
+        return f"https://t.me/{info.username}"
+    if info.kind is Kind.USER:
+        return f"tg://openmessage?user_id={info.id}"
+    raw = str(info.id)
+    if raw.startswith("-100"):
+        return f"https://t.me/c/{raw[4:]}"
+    return None
+
+
 def _fmt_date(d: datetime | None) -> str:
     return d.strftime("%Y-%m-%d") if d else "(no messages)"
 
@@ -590,12 +608,14 @@ def review(
     approved: list[Candidate] = []
     for i, cand in enumerate(candidates, 1):
         info = cand.info
+        link = chat_link(info)
         console.print(
             f"\n[bold]{i}/{len(candidates)}[/bold]  [{cand.category.value}]  {info.title}"
             f"   (id: {info.id})\n"
             f"  last message: {_fmt_date(info.last_message_date)}"
             + (f" - {info.snippet}" if info.snippet else "")
             + f"   unread: {info.unread_count}\n"
+            + (f"  open: [link={link}]{link}[/link]\n" if link else "")
             + f"  {CONFIRM_COPY[cand.category].format(handle=_handle(info))}"
         )
         while True:

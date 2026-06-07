@@ -134,6 +134,42 @@ def test_review_shows_id_and_last_message(monkeypatch, actions_recorder):
     assert "last message:" in result.output
 
 
+# --- chat_link: deep links to open the chat locally ---------------------------------
+
+
+def make_info(**overrides):
+    import dataclasses
+
+    return dataclasses.replace(make_candidate(Category.STALE_DM).info, **overrides)
+
+
+def test_chat_link_prefers_public_username():
+    info = make_info(id=-1001234, kind=Kind.BROADCAST, username="somechannel")
+    assert cleaner.chat_link(info) == "https://t.me/somechannel"
+
+
+def test_chat_link_user_by_id():
+    info = make_info(id=987654, kind=Kind.USER, username=None)
+    assert cleaner.chat_link(info) == "tg://openmessage?user_id=987654"
+
+
+def test_chat_link_supergroup_member_link():
+    info = make_info(id=-1001234567890, kind=Kind.MEGAGROUP, username=None)
+    assert cleaner.chat_link(info) == "https://t.me/c/1234567890"
+
+
+def test_chat_link_basic_group_has_no_reliable_link():
+    info = make_info(id=-4321, kind=Kind.GROUP, username=None)
+    assert cleaner.chat_link(info) is None
+
+
+def test_review_shows_open_link(monkeypatch, actions_recorder):
+    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=987654)])
+    result = runner.invoke(app, ["review"], input="n\n")
+    assert result.exit_code == 0
+    assert "tg://openmessage?user_id=987654" in result.output
+
+
 def test_review_rejects_unreviewable_types(monkeypatch, actions_recorder):
     patch_candidates(monkeypatch, [make_candidate(Category.GHOST)])
     result = runner.invoke(app, ["review", "--types", "ghost"])
