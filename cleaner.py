@@ -461,28 +461,16 @@ def _handle(info: DialogInfo) -> str:
 
 
 def chat_links(info: DialogInfo) -> list[str]:
-    """Best-effort deep links that open the chat in the local Telegram app.
+    """Best-effort https://t.me/ links that open the chat.
 
-    Returns up to two links: a https://t.me/ one (browser-friendly) and a
-    tg:// one (direct app open, no browser step). Empty list when no reliable
-    link exists (basic private group with no username).
+    Returns at most one link. Empty list when no reliable link exists
+    (basic private group with no username).
     """
     if info.username:
-        return [
-            f"https://t.me/{info.username}",
-            f"tg://resolve?domain={info.username}",
-        ]
-    if info.kind is Kind.USER:
-        return [
-            f"tg://openmessage?user_id={info.id}",
-        ]
+        return [f"https://t.me/{info.username}"]
     raw = str(info.id)
     if raw.startswith("-100"):
-        internal = raw[4:]
-        return [
-            f"https://t.me/c/{internal}",
-            f"tg://privatepost?channel={internal}",
-        ]
+        return [f"https://t.me/c/{raw[4:]}"]
     return []
 
 
@@ -643,15 +631,18 @@ def review(
                 + f"  {CONFIRM_COPY[cand.category].format(handle=_handle(info))}"
             )
             while True:
-                choice = typer.prompt("  approve / skip / keep forever [y/n/k]").strip().lower()
-                if choice in ("y", "n", "k"):
+                choice = typer.prompt("  approve / skip / keep forever / execute now [y/n/k/q]").strip().lower()
+                if choice in ("y", "n", "k", "q"):
                     break
-                console.print("  Please answer y, n, or k.")
+                console.print("  Please answer y, n, k, or q.")
             if choice == "y":
                 approved.append(cand)
             elif choice == "k":
                 append_keeplist(info.id)
                 console.print(f"  Added to keeplist — {info.title} will never be suggested again.")
+            elif choice == "q":
+                console.print(f"  Stopped early — {len(candidates) - i} item(s) skipped.")
+                break
 
     if not approved:
         console.print("\nNothing approved. Nothing executed.")

@@ -143,23 +143,19 @@ def make_info(**overrides):
     return dataclasses.replace(make_candidate(Category.STALE_DM).info, **overrides)
 
 
-def test_chat_links_public_username_returns_both():
+def test_chat_links_public_username():
     info = make_info(id=-1001234, kind=Kind.BROADCAST, username="somechannel")
-    links = cleaner.chat_links(info)
-    assert "https://t.me/somechannel" in links
-    assert "tg://resolve?domain=somechannel" in links
+    assert cleaner.chat_links(info) == ["https://t.me/somechannel"]
 
 
-def test_chat_links_user_by_id():
+def test_chat_links_user_by_id_has_no_link():
     info = make_info(id=987654, kind=Kind.USER, username=None)
-    assert cleaner.chat_links(info) == ["tg://openmessage?user_id=987654"]
+    assert cleaner.chat_links(info) == []
 
 
-def test_chat_links_supergroup_returns_both():
+def test_chat_links_supergroup_member_link():
     info = make_info(id=-1001234567890, kind=Kind.MEGAGROUP, username=None)
-    links = cleaner.chat_links(info)
-    assert "https://t.me/c/1234567890" in links
-    assert "tg://privatepost?channel=1234567890" in links
+    assert cleaner.chat_links(info) == ["https://t.me/c/1234567890"]
 
 
 def test_chat_links_basic_group_returns_empty():
@@ -167,11 +163,32 @@ def test_chat_links_basic_group_returns_empty():
     assert cleaner.chat_links(info) == []
 
 
-def test_review_shows_open_links(monkeypatch, actions_recorder):
-    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=987654)])
-    result = runner.invoke(app, ["review"], input="n\n")
+def test_review_shows_https_link_for_named_chat(monkeypatch, actions_recorder):
+    import dataclasses
+    base = make_candidate(Category.UNREAD_CHANNEL, id=987654, kind=Kind.BROADCAST)
+    info = dataclasses.replace(base.info, username="mychannel")
+    patch_candidates(monkeypatch, [Candidate(info, Category.UNREAD_CHANNEL)])
+    result = runner.invoke(app, ["review", "--types", "unread_channel"], input="n\n")
     assert result.exit_code == 0
-    assert "tg://openmessage?user_id=987654" in result.output
+    assert "https://t.me/mychannel" in result.output
+
+
+def test_q_stops_loop_and_executes_approved_so_far(monkeypatch, actions_recorder):
+    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=i) for i in (1, 2, 3)])
+    # approve 1, then q on 2 (skips 3), confirm batch
+    result = runner.invoke(app, ["review"], input="y\nq\ny\n")
+    assert result.exit_code == 0
+    assert len(actions_recorder) == 1
+    assert [c.info.id for c in actions_recorder[0]] == [1]
+    assert "skipped" in result.output
+
+
+def test_q_with_nothing_approved_executes_nothing(monkeypatch, actions_recorder):
+    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=i) for i in (1, 2)])
+    result = runner.invoke(app, ["review"], input="q\n")
+    assert result.exit_code == 0
+    assert actions_recorder == []
+    assert "Nothing approved" in result.output
 
 
 def test_approve_all_skips_per_item_triage_but_final_yes_executes(monkeypatch, actions_recorder):
