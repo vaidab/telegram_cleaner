@@ -121,6 +121,19 @@ def test_review_k_appends_keeplist_and_fires_nothing(monkeypatch, tmp_path, acti
     assert cleaner.load_keeplist() == {77}
 
 
+def test_review_shows_id_and_last_message(monkeypatch, actions_recorder):
+    import dataclasses
+
+    base = make_candidate(Category.STALE_DM, id=987654)
+    info = dataclasses.replace(base.info, snippet="see you tomorrow then")
+    patch_candidates(monkeypatch, [Candidate(info, Category.STALE_DM)])
+    result = runner.invoke(app, ["review"], input="n\n")
+    assert result.exit_code == 0
+    assert "id: 987654" in result.output
+    assert "see you tomorrow then" in result.output
+    assert "last message:" in result.output
+
+
 def test_review_rejects_unreviewable_types(monkeypatch, actions_recorder):
     patch_candidates(monkeypatch, [make_candidate(Category.GHOST)])
     result = runner.invoke(app, ["review", "--types", "ghost"])

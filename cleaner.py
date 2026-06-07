@@ -319,8 +319,11 @@ def build_info(dialog) -> DialogInfo:
         kind = Kind.USER
     message = dialog.message
     snippet = ""
-    if message is not None and getattr(message, "message", None):
-        snippet = message.message[:60].replace("\n", " ")
+    if message is not None:
+        if getattr(message, "message", None):
+            snippet = message.message[:60].replace("\n", " ")
+        else:
+            snippet = "(media or service message)"
     return DialogInfo(
         id=dialog.id,
         title=dialog.name or "(no title)",
@@ -588,9 +591,11 @@ def review(
     for i, cand in enumerate(candidates, 1):
         info = cand.info
         console.print(
-            f"\n[bold]{i}/{len(candidates)}[/bold]  [{cand.category.value}]  {info.title}\n"
-            f"  last message: {_fmt_date(info.last_message_date)}   unread: {info.unread_count}\n"
-            + (f"  preview: {info.snippet}\n" if info.snippet else "")
+            f"\n[bold]{i}/{len(candidates)}[/bold]  [{cand.category.value}]  {info.title}"
+            f"   (id: {info.id})\n"
+            f"  last message: {_fmt_date(info.last_message_date)}"
+            + (f" - {info.snippet}" if info.snippet else "")
+            + f"   unread: {info.unread_count}\n"
             + f"  {CONFIRM_COPY[cand.category].format(handle=_handle(info))}"
         )
         while True:
