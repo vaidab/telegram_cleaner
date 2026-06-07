@@ -526,11 +526,33 @@ def _thresholds_options(stale_days: int, group_quiet_days: int, channel_unread_m
 
 @app.command()
 def scan(
+    types: str = typer.Option(
+        "",
+        help=(
+            "Comma-separated types to show in the candidates table "
+            "(ghost, forbidden, stale_dm, dead_group, unread_channel). "
+            "Omit to show all actionable types."
+        ),
+    ),
     stale_days: int = typer.Option(730, help="DM silence threshold in days"),
     group_quiet_days: int = typer.Option(365, help="Group silence threshold in days"),
     channel_unread_min: int = typer.Option(50, help="Channel unread-count threshold"),
 ) -> None:
     """Read-only: classify every dialog and print the results. Always safe."""
+    actionable_cats = {c for c in Category if c is not Category.KEEP}
+    if types.strip():
+        requested = [t.strip() for t in types.split(",") if t.strip()]
+        invalid = [t for t in requested if t not in {c.value for c in Category} or t == Category.KEEP.value]
+        if invalid:
+            console.print(
+                f"[red]Unknown type(s): {', '.join(invalid)}. "
+                f"Valid: {', '.join(c.value for c in Category if c is not Category.KEEP)}[/red]"
+            )
+            raise typer.Exit(code=1)
+        filter_cats: set[Category] | None = {Category(t) for t in requested}
+    else:
+        filter_cats = None  # show all actionable
+
     candidates = gather_candidates(_thresholds_options(stale_days, group_quiet_days, channel_unread_min))
     counts: dict[Category, int] = {}
     for c in candidates:
@@ -541,11 +563,13 @@ def scan(
     for cat in Category:
         summary.add_row(cat.value, str(counts.get(cat, 0)))
     console.print(summary)
-    actionable = [c for c in candidates if c.category is not Category.KEEP]
+    shown_cats = filter_cats if filter_cats is not None else actionable_cats
+    actionable = [c for c in candidates if c.category in shown_cats]
     if actionable:
         console.print(_candidate_table(actionable, "Candidates"))
     else:
-        console.print("Nothing to clean. Your chat list is tidy.")
+        msg = "Nothing to clean. Your chat list is tidy." if filter_cats is None else f"No candidates for: {types}"
+        console.print(msg)
 
 
 @app.command("purge-ghosts")
