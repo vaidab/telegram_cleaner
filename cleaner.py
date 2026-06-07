@@ -631,17 +631,19 @@ def review(
                 + f"  {CONFIRM_COPY[cand.category].format(handle=_handle(info))}"
             )
             while True:
-                choice = typer.prompt("  approve / skip / keep forever / execute now [y/n/k/q]").strip().lower()
+                choice = typer.prompt("  approve / skip / keep forever / approve & execute now [y/n/k/q]").strip().lower()
                 if choice in ("y", "n", "k", "q"):
                     break
                 console.print("  Please answer y, n, k, or q.")
-            if choice == "y":
+            if choice in ("y", "q"):
                 approved.append(cand)
-            elif choice == "k":
+            if choice == "k":
                 append_keeplist(info.id)
                 console.print(f"  Added to keeplist — {info.title} will never be suggested again.")
-            elif choice == "q":
-                console.print(f"  Stopped early — {len(candidates) - i} item(s) skipped.")
+            if choice == "q":
+                remaining = len(candidates) - i
+                if remaining:
+                    console.print(f"  Stopping — {remaining} item(s) skipped.")
                 break
 
     if not approved:

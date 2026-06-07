@@ -173,22 +173,23 @@ def test_review_shows_https_link_for_named_chat(monkeypatch, actions_recorder):
     assert "https://t.me/mychannel" in result.output
 
 
-def test_q_stops_loop_and_executes_approved_so_far(monkeypatch, actions_recorder):
+def test_q_approves_current_item_and_stops(monkeypatch, actions_recorder):
     patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=i) for i in (1, 2, 3)])
-    # approve 1, then q on 2 (skips 3), confirm batch
+    # approve 1, q on 2 (approves 2 + stops, skips 3), confirm batch
     result = runner.invoke(app, ["review"], input="y\nq\ny\n")
     assert result.exit_code == 0
     assert len(actions_recorder) == 1
-    assert [c.info.id for c in actions_recorder[0]] == [1]
-    assert "skipped" in result.output
+    assert [c.info.id for c in actions_recorder[0]] == [1, 2]
 
 
-def test_q_with_nothing_approved_executes_nothing(monkeypatch, actions_recorder):
-    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=i) for i in (1, 2)])
-    result = runner.invoke(app, ["review"], input="q\n")
+def test_q_on_first_item_approves_and_executes_it(monkeypatch, actions_recorder):
+    patch_candidates(monkeypatch, [make_candidate(Category.STALE_DM, id=i) for i in (1, 2, 3)])
+    # q on item 1: approves it, skips 2+3, final confirmation
+    result = runner.invoke(app, ["review"], input="q\ny\n")
     assert result.exit_code == 0
-    assert actions_recorder == []
-    assert "Nothing approved" in result.output
+    assert len(actions_recorder) == 1
+    assert [c.info.id for c in actions_recorder[0]] == [1]
+    assert "Stopping" in result.output
 
 
 def test_approve_all_skips_per_item_triage_but_final_yes_executes(monkeypatch, actions_recorder):
